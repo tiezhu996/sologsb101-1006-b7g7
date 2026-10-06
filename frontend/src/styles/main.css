@@ -1,0 +1,245 @@
+/* 地铁隧道环片裂缝复测台账 · 全局样式 */
+:root {
+  --tc-ink: #16233a;
+  --tc-ink-soft: #5b6b82;
+  --tc-line: #dbe3ee;
+  --tc-bg: #f2f5f9;
+  --tc-panel: #ffffff;
+  --tc-accent: #13335c;
+  --tc-accent-soft: #2b5c94;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--tc-bg);
+  color: var(--tc-ink);
+  font-family: 'PingFang SC', 'Microsoft YaHei', 'Helvetica Neue', Arial, sans-serif;
+  font-size: 14px;
+}
+
+.app-shell {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+}
+
+.app-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 24px;
+  background: linear-gradient(120deg, #0e2440 0%, #13335c 55%, #2b5c94 100%);
+  color: #eaf2fb;
+}
+
+.app-header__brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.app-header__mark {
+  display: grid;
+  place-items: center;
+  width: 42px;
+  height: 42px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.14);
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.app-header__title {
+  margin: 0;
+  font-size: 18px;
+  letter-spacing: 2px;
+}
+
+.app-header__sub {
+  margin: 2px 0 0;
+  font-size: 12px;
+  letter-spacing: 1px;
+  color: rgba(234, 242, 251, 0.72);
+}
+
+.app-nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.app-nav__item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+  color: #eaf2fb;
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.18s ease;
+}
+
+.app-nav__item:hover {
+  background: rgba(255, 255, 255, 0.16);
+}
+
+.app-nav__item.is-active {
+  background: #eaf2fb;
+  color: #13335c;
+  font-weight: 600;
+}
+
+.app-nav__badge {
+  font-style: normal;
+  font-size: 11px;
+  padding: 0 6px;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.18);
+}
+
+.app-main {
+  flex: 1;
+  width: 100%;
+  max-width: 1400px;
+  margin: 0 auto;
+  padding: 20px 24px 32px;
+}
+
+.app-footer {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 12px 24px 20px;
+  font-size: 12px;
+  color: var(--tc-ink-soft);
+}
+
+.page-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.page-head__title {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 700;
+}
+
+.page-head__desc {
+  margin: 4px 0 0;
+  font-size: 13px;
+  color: var(--tc-ink-soft);
+}
+
+.page-head__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.panel {
+  padding: 16px;
+  background: var(--tc-panel);
+  border: 1px solid var(--tc-line);
+  border-radius: 12px;
+}
+
+.panel + .panel {
+  margin-top: 16px;
+}
+
+.stat-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.grid-two {
+  display: grid;
+  grid-template-columns: minmax(280px, 360px) 1fr;
+  gap: 16px;
+  align-items: start;
+}
+
+@media (max-width: 1080px) {
+  .grid-two {
+    grid-template-columns: 1fr;
+  }
+}
+
+.muted {
+  color: var(--tc-ink-soft);
+  font-size: 12px;
+}
+
+.section-card {
+  padding: 12px 14px;
+  border: 1px solid var(--tc-line);
+  border-radius: 10px;
+  cursor: pointer;
+  transition: all 0.16s ease;
+  background: #fff;
+}
+
+.section-card + .section-card {
+  margin-top: 10px;
+}
+
+.section-card:hover {
+  border-color: var(--tc-accent-soft);
+}
+
+.section-card.is-active {
+  border-color: var(--tc-accent);
+  box-shadow: 0 0 0 2px rgba(19, 51, 92, 0.14);
+}
+
+.section-card__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.section-card__title {
+  font-weight: 600;
+}
+
+.section-card__meta {
+  margin-top: 6px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--tc-ink-soft);
+}
+
+.chart-wrap {
+  padding: 12px;
+  background: #fbfcfe;
+  border: 1px solid var(--tc-line);
+  border-radius: 10px;
+  overflow-x: auto;
+}
