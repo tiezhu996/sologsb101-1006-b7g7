@@ -15,6 +15,7 @@ import { useCrackStore } from '@/stores/crackStore'
 import { useSectionStore } from '@/stores/sectionStore'
 import { useSurveyStore } from '@/stores/surveyStore'
 import { useIdbTable } from '@/hooks/useIdbTable'
+import { deleteEntitiesWithChain } from '@/utils/ledgerGateway'
 import {
   DB_VERSION,
   clearAllTables,
@@ -46,7 +47,12 @@ type FilterModel = { keyword: string; [key: string]: string | string[] | boolean
 const crackStore = useCrackStore()
 const surveyStore = useSurveyStore()
 const sectionStore = useSectionStore()
-const adviceTable = useIdbTable<AdviceRow>((database) => database.advices, { sortByUpdatedAt: false })
+const adviceTable = useIdbTable<AdviceRow>((database) => database.advices, {
+  sortByUpdatedAt: false,
+  entityType: 'advice',
+  idPrefix: 'ad',
+  defaultSource: '整治建议现场录入'
+})
 
 const counts = ref<Record<string, number>>({})
 const lastBackupAt = ref<string | null>(readLastBackupAt())
@@ -157,10 +163,17 @@ async function submit(): Promise<void> {
   const valid = await instance.validate().catch(() => false)
   if (!valid) return
   if (editingId) {
-    await adviceTable.update(editingId, { ...form })
-    ElMessage.success('整治建议已更新')
+    await adviceTable.update(
+      editingId,
+      { ...form },
+      { source: '整治建议现场纠错（建议与备份页）', action: '建议内容更正' }
+    )
+    ElMessage.success('整治建议已更新（已追加更正记录）')
   } else {
-    await adviceTable.create({ ...form }, 'ad')
+    await adviceTable.create(
+      { ...form },
+      { source: '整治建议现场录入（建议与备份页）', action: '初始建账' }
+    )
     ElMessage.success('整治建议已创建')
   }
   dialogVisible.value = false
@@ -174,7 +187,7 @@ async function removeAdvice(advice: AdviceRow): Promise<void> {
     { type: 'warning', confirmButtonText: '确认删除', cancelButtonText: '取消' }
   ).catch(() => false)
   if (!confirmed) return
-  await adviceTable.remove(advice.id)
+  await deleteEntitiesWithChain('advice', [advice.id])
   ElMessage.success('整治建议已删除')
   await refreshCounts()
 }
@@ -185,8 +198,11 @@ async function advance(advice: AdviceRow): Promise<void> {
     ElMessage.info('该建议已完成闭环')
     return
   }
-  await adviceTable.update(advice.id, { state: next })
-  ElMessage.success(`建议状态已推进为「${next}」`)
+  await adviceTable.update(advice.id, { state: next }, {
+    source: '整治建议状态现场流转',
+    action: `状态流转为「${next}」`
+  })
+  ElMessage.success(`建议状态已推进为「${next}」（已追加更正记录）`)
   await refreshCounts()
 }
 
@@ -402,6 +418,7 @@ function adviceRowKey(row: AdviceRow): string {
           {{ counts.cracks ?? 0 }} / {{ counts.surveys ?? 0 }}
         </el-descriptions-item>
         <el-descriptions-item label="整治建议">{{ counts.advices ?? 0 }}</el-descriptions-item>
+        <el-descriptions-item label="修订链记录">{{ counts.revisions ?? 0 }}</el-descriptions-item>
       </el-descriptions>
 
       <div style="display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px">

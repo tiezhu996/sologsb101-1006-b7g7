@@ -16,7 +16,8 @@ import { useSectionStore } from '@/stores/sectionStore'
 import { useSurveyStore } from '@/stores/surveyStore'
 import { useIdbTable } from '@/hooks/useIdbTable'
 import { useCrackTrend } from '@/hooks/useCrackTrend'
-import { db, type AdviceRow } from '@/utils/db'
+import { type AdviceRow } from '@/utils/db'
+import { deleteEntitiesWithChain } from '@/utils/ledgerGateway'
 import {
   ADVICE_LEVELS,
   ADVICE_MEASURES,
@@ -33,7 +34,12 @@ type FilterModel = { keyword: string; [key: string]: string | string[] | boolean
 const crackStore = useCrackStore()
 const surveyStore = useSurveyStore()
 const sectionStore = useSectionStore()
-const adviceTable = useIdbTable<AdviceRow>((database) => database.advices)
+const adviceTable = useIdbTable<AdviceRow>((database) => database.advices, {
+  sortByUpdatedAt: false,
+  entityType: 'advice',
+  idPrefix: 'ad',
+  defaultSource: '整治建议现场录入'
+})
 
 const drawerVisible = ref(false)
 const drawerCrackId = ref<string | null>(null)
@@ -92,20 +98,18 @@ async function generateAdvice(row: CrackEnriched): Promise<void> {
     ElMessage.info(`${row.crack.code} 已存在整治建议，可在「建议与备份」页维护`)
     return
   }
-  const now = Date.now()
   const level = row.level
-  const advice: AdviceRow = {
-    id: `ad_${now.toString(36)}${Math.random().toString(36).slice(2, 6)}`,
-    crackId: row.crack.id,
-    level,
-    measure: LEVEL_MEASURE_SUGGEST[level],
-    basis: basisText(row.rate, level),
-    state: '待下发',
-    createdAt: now,
-    updatedAt: now
-  }
-  await db.advices.put(advice)
-  ElMessage.success(`已按「${level}」生成整治建议草稿：${advice.measure}`)
+  const created = (await adviceTable.create(
+    {
+      crackId: row.crack.id,
+      level,
+      measure: LEVEL_MEASURE_SUGGEST[level],
+      basis: basisText(row.rate, level),
+      state: '待下发'
+    },
+    { source: '速率分级页一键生成整治建议草稿', action: '初始建账（按速率带出）' }
+  )) as AdviceRow
+  ElMessage.success(`已按「${level}」生成整治建议草稿：${created.measure}`)
 }
 
 /* --------------------------- 建议维护 --------------------------- */
@@ -138,13 +142,16 @@ function openAdviceEdit(row: CrackEnriched): void {
 async function submitAdvice(): Promise<void> {
   const advice = adviceOf(adviceForm.crackId)
   if (!advice) return
-  await db.advices.update(advice.id, {
-    level: adviceForm.level,
-    measure: adviceForm.measure,
-    basis: adviceForm.basis.trim(),
-    state: adviceForm.state,
-    updatedAt: Date.now()
-  })
+  await adviceTable.update(
+    advice.id,
+    {
+      level: adviceForm.level,
+      measure: adviceForm.measure,
+      basis: adviceForm.basis.trim(),
+      state: adviceForm.state
+    },
+    { source: '整治建议现场纠错（速率分级页）', action: '建议内容更正' }
+  )
   ElMessage.success('整治建议已更新')
   adviceDialogVisible.value = false
 }
@@ -158,7 +165,7 @@ async function removeAdvice(row: CrackEnriched): Promise<void> {
     { type: 'warning', confirmButtonText: '确认撤销', cancelButtonText: '取消' }
   ).catch(() => false)
   if (!confirmed) return
-  await db.advices.delete(advice.id)
+  await deleteEntitiesWithChain('advice', [advice.id])
   ElMessage.success('整治建议已撤销')
 }
 

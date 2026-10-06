@@ -10,12 +10,17 @@ import type { Ring } from '@/types/ring'
 import type { Crack } from '@/types/crack'
 import type { Survey } from '@/types/survey'
 import type { Advice } from '@/types/advice'
+import { REVISION_SOURCE, type RevisionEntityType, type RevisionRecord } from '@/types/revision'
+import { backfillMissingChainsIn, backfillMissingChains } from '@/utils/ledgerGateway'
 
 /** IndexedDB 数据库名 */
 export const DB_NAME = 'gbtunnelcrack'
 
-/** 当前数据结构版本号：调整表结构必须递增并补 upgrade 迁移 */
-export const DB_VERSION = 2
+/**
+ * 当前数据结构版本号：调整表结构必须递增并补 upgrade 迁移
+ * - v3：新增 revisions 修订链表；升级时按旧行当时内容补初始链（缺失不算篡改）
+ */
+export const DB_VERSION = 3
 
 /** localStorage 侧少量元数据键名 */
 export const LS_KEYS = {
@@ -44,6 +49,8 @@ export interface BackupPayload {
   cracks: Crack[]
   surveys: Survey[]
   advices: Advice[]
+  /** v3 起随备份导出修订链；旧档导入时按当时内容补初始链 */
+  revisions?: RevisionRecord[]
 }
 
 /** 带行修订号的持久化实体，便于逐行迁移 */
@@ -52,7 +59,7 @@ export interface Revisioned {
   revision?: number
 }
 
-export const ROW_REVISION = 2
+export const ROW_REVISION = 3
 
 export type SectionRow = Section & Revisioned
 export type RingRow = Ring & Revisioned
@@ -66,6 +73,8 @@ class TunnelCrackDatabase extends Dexie {
   cracks!: Table<CrackRow, string>
   surveys!: Table<SurveyRow, string>
   advices!: Table<AdviceRow, string>
+  /** 修订链：只追加，按实体分组、seq 递增 */
+  revisions!: Table<RevisionRecord, string>
 
   constructor() {
     super(DB_NAME)
@@ -80,7 +89,7 @@ class TunnelCrackDatabase extends Dexie {
     })
 
     // v2：裂缝补充 sectionId 冗余列（按区间筛选/统计免联表）；复测补充 surveyor 索引；建议补充 note 字段
-    this.version(DB_VERSION)
+    this.version(2)
       .stores({
         sections: 'id, line, structureType, startMileage, updatedAt',
         rings: 'id, sectionId, ringNo, mileage, segmentType, updatedAt',
@@ -99,7 +108,7 @@ class TunnelCrackDatabase extends Dexie {
         ]
         for (const table of tables) {
           await table.toCollection().modify((row: Record<string, unknown>) => {
-            row.revision = ROW_REVISION
+            row.revision = 2
           })
         }
 
@@ -125,6 +134,43 @@ class TunnelCrackDatabase extends Dexie {
               survey.deltaWidthMm = 0
             }
           })
+      })
+
+    // v3：新增 revisions 修订链表；旧数据按当时内容补初始链（缺失字段照实标注，不算篡改）
+    this.version(DB_VERSION)
+      .stores({
+        sections: 'id, line, structureType, startMileage, updatedAt',
+        rings: 'id, sectionId, ringNo, mileage, segmentType, updatedAt',
+        cracks: 'id, ringId, sectionId, code, position, direction, state, updatedAt',
+        surveys: 'id, crackId, seq, date, surveyor, updatedAt',
+        advices: 'id, crackId, level, measure, state, updatedAt',
+        revisions: 'id, [entityType+entityId], entityType, entityId, seq, kind, recordedAt'
+      })
+      .upgrade(async (tx) => {
+        // 行结构修订号推进到 3（含上一版漏标 revision 的行）
+        const tables: Array<Table<Record<string, unknown>, string>> = [
+          tx.table('sections'),
+          tx.table('rings'),
+          tx.table('cracks'),
+          tx.table('surveys'),
+          tx.table('advices')
+        ]
+        for (const table of tables) {
+          await table.toCollection().modify((row: Record<string, unknown>) => {
+            row.revision = ROW_REVISION
+          })
+        }
+
+        // 按旧行当时内容补初始链。整段处于 Dexie 升级事务内：
+        // 任一步失败，整个升级回滚到写入前状态，下次打开库时可原样重试（幂等，不重复建链）。
+        const result = await backfillMissingChainsIn(tx, {
+          source: REVISION_SOURCE.migration,
+          action: '旧数据补初始链',
+          at: Date.now()
+        })
+        if (result.failed.length > 0) {
+          throw new Error(`旧数据修订链补链失败 ${result.failed.length} 条，已回滚升级：${result.failed.join('、')}`)
+        }
       })
   }
 }
@@ -217,53 +263,95 @@ const SEED_ADVICES: AdviceRow[] = [
   { id: 'ad-4', crackId: 'crack-2', level: '一般', measure: '注浆', basis: '宽度缓慢增长，侧墙环向裂缝建议预防性注浆封堵', state: '待下发', createdAt: stamp(-7), updatedAt: stamp(-7), revision: ROW_REVISION }
 ]
 
-/** 幂等播种：仅当主表为空时写入演示数据 */
+/** 幂等播种：仅当主表为空时写入演示数据（同步建立初始修订链） */
 export async function seedDatabase(): Promise<void> {
-  await db.transaction('rw', db.sections, db.rings, db.cracks, db.surveys, db.advices, async () => {
-    await db.sections.bulkPut(SEED_SECTIONS)
-    await db.rings.bulkPut(SEED_RINGS)
-    await db.cracks.bulkPut(SEED_CRACKS)
-    await db.surveys.bulkPut(SEED_SURVEYS)
-    await db.advices.bulkPut(SEED_ADVICES)
-  })
+  await db.transaction(
+    'rw',
+    [db.sections, db.rings, db.cracks, db.surveys, db.advices, db.revisions],
+    async () => {
+      await db.sections.bulkPut(SEED_SECTIONS)
+      await db.rings.bulkPut(SEED_RINGS)
+      await db.cracks.bulkPut(SEED_CRACKS)
+      await db.surveys.bulkPut(SEED_SURVEYS)
+      await db.advices.bulkPut(SEED_ADVICES)
+      // 演示数据同样建初始链；已在事务内，重复调用幂等（已有链跳过）
+      await backfillMissingChainsIn(db, {
+        source: REVISION_SOURCE.seed,
+        action: '初始建账（演示数据）',
+        at: SEED_STAMP
+      })
+    }
+  )
 }
 
-/** 应用启动时调用：打开数据库并在首屏为空时播种 */
+/**
+ * 应用启动时调用：打开数据库并在首屏为空时播种；
+ * 再兜底补一次初始链（捕获升级中断/异常路径产生的未建链旧记录），
+ * 补链在单事务内完成，失败回滚并重试一次；幂等，重复操作不多记。
+ */
 export async function initDatabase(): Promise<void> {
   await db.open()
   if ((await db.sections.count()) === 0) {
     await seedDatabase()
   }
+  await backfillMissingChains({
+    source: REVISION_SOURCE.migration,
+    action: '启动兜底补初始链'
+  })
 }
 
 /* ============================== 级联删除 ============================== */
 
-/** 删除区间：级联删除环片 → 裂缝 → 复测 → 建议 */
+/** 删除区间：级联删除环片 → 裂缝 → 复测 → 建议（修订链随行清除） */
 export async function deleteSectionCascade(sectionId: string): Promise<void> {
-  await db.transaction('rw', db.sections, db.rings, db.cracks, db.surveys, db.advices, async () => {
-    const rings = await db.rings.where('sectionId').equals(sectionId).toArray()
-    const ringIds = rings.map((ring) => ring.id)
-    await deleteCracksOfRings(ringIds)
-    if (ringIds.length > 0) await db.rings.bulkDelete(ringIds)
-    await db.sections.delete(sectionId)
-  })
+  await db.transaction(
+    'rw',
+    [db.sections, db.rings, db.cracks, db.surveys, db.advices, db.revisions],
+    async () => {
+      const rings = await db.rings.where('sectionId').equals(sectionId).toArray()
+      const ringIds = rings.map((ring) => ring.id)
+      await deleteCracksOfRings(ringIds)
+      if (ringIds.length > 0) {
+        await db.rings.bulkDelete(ringIds)
+        await deleteRevisionRows('ring', ringIds)
+      }
+      await db.sections.delete(sectionId)
+      await deleteRevisionRows('section', [sectionId])
+    }
+  )
 }
 
-/** 删除环片：级联删除裂缝及其下游 */
+/** 删除环片：级联删除裂缝及其下游（修订链随行清除） */
 export async function deleteRingCascade(ringId: string): Promise<void> {
-  await db.transaction('rw', db.rings, db.cracks, db.surveys, db.advices, async () => {
+  await db.transaction('rw', db.rings, db.cracks, db.surveys, db.advices, db.revisions, async () => {
     await deleteCracksOfRings([ringId])
     await db.rings.delete(ringId)
+    await deleteRevisionRows('ring', [ringId])
   })
 }
 
-/** 删除裂缝：级联删除复测与建议 */
+/** 删除裂缝：级联删除复测与建议（修订链随行清除） */
 export async function deleteCrackCascade(crackId: string): Promise<void> {
-  await db.transaction('rw', db.cracks, db.surveys, db.advices, async () => {
+  await db.transaction('rw', db.cracks, db.surveys, db.advices, db.revisions, async () => {
+    const surveyIds = (await db.surveys.where('crackId').equals(crackId).toArray()).map((survey) => survey.id)
+    const adviceIds = (await db.advices.where('crackId').equals(crackId).toArray()).map((advice) => advice.id)
     await db.surveys.where('crackId').equals(crackId).delete()
     await db.advices.where('crackId').equals(crackId).delete()
     await db.cracks.delete(crackId)
+    if (surveyIds.length > 0) await deleteRevisionRows('survey', surveyIds)
+    if (adviceIds.length > 0) await deleteRevisionRows('advice', adviceIds)
+    await deleteRevisionRows('crack', [crackId])
   })
+}
+
+/** 删除某类实体的修订链（复合索引逐条删除） */
+async function deleteRevisionRows(entityType: RevisionEntityType, ids: string[]): Promise<void> {
+  for (const id of ids) {
+    await db.revisions
+      .where('[entityType+entityId]')
+      .equals([entityType, id])
+      .delete()
+  }
 }
 
 async function deleteCracksOfRings(ringIds: string[]): Promise<void> {
@@ -281,24 +369,26 @@ async function deleteCracksOfRings(ringIds: string[]): Promise<void> {
 
 /** 各表行数统计 */
 export async function countAll(): Promise<Record<string, number>> {
-  const [sections, rings, cracks, surveys, advices] = await Promise.all([
+  const [sections, rings, cracks, surveys, advices, revisions] = await Promise.all([
     db.sections.count(),
     db.rings.count(),
     db.cracks.count(),
     db.surveys.count(),
-    db.advices.count()
+    db.advices.count(),
+    db.revisions.count()
   ])
-  return { sections, rings, cracks, surveys, advices }
+  return { sections, rings, cracks, surveys, advices, revisions }
 }
 
-/** 导出整库快照（剥离内部 revision 字段） */
+/** 导出整库快照（剥离内部 revision 字段，保留修订链） */
 export async function exportSnapshot(): Promise<BackupPayload> {
-  const [sections, rings, cracks, surveys, advices] = await Promise.all([
+  const [sections, rings, cracks, surveys, advices, revisions] = await Promise.all([
     db.sections.toArray(),
     db.rings.toArray(),
     db.cracks.toArray(),
     db.surveys.toArray(),
-    db.advices.toArray()
+    db.advices.toArray(),
+    db.revisions.toArray()
   ])
   const strip = <T extends Revisioned>(row: T): Omit<T, 'revision'> => {
     const { revision: _revision, ...rest } = row
@@ -312,40 +402,60 @@ export async function exportSnapshot(): Promise<BackupPayload> {
     rings: rings.map(strip),
     cracks: cracks.map(strip),
     surveys: surveys.map(strip),
-    advices: advices.map(strip)
+    advices: advices.map(strip),
+    revisions: revisions.sort((a, b) => a.seq - b.seq || a.recordedAt - b.recordedAt)
   }
 }
 
-/** 用快照覆盖整库 */
+/** 用快照覆盖整库；修订链随快照恢复，旧档无链时按当时内容补初始链 */
 export async function importSnapshot(payload: BackupPayload): Promise<void> {
-  await db.transaction('rw', db.sections, db.rings, db.cracks, db.surveys, db.advices, async () => {
-    await Promise.all([
-      db.sections.clear(),
-      db.rings.clear(),
-      db.cracks.clear(),
-      db.surveys.clear(),
-      db.advices.clear()
-    ])
-    const rev = <T>(row: T): T & Revisioned => ({ ...row, revision: ROW_REVISION })
-    await db.sections.bulkPut((payload.sections ?? []).map(rev))
-    await db.rings.bulkPut((payload.rings ?? []).map(rev))
-    await db.cracks.bulkPut((payload.cracks ?? []).map(rev))
-    await db.surveys.bulkPut((payload.surveys ?? []).map(rev))
-    await db.advices.bulkPut((payload.advices ?? []).map(rev))
-  })
+  await db.transaction(
+    'rw',
+    [db.sections, db.rings, db.cracks, db.surveys, db.advices, db.revisions],
+    async () => {
+      await Promise.all([
+        db.sections.clear(),
+        db.rings.clear(),
+        db.cracks.clear(),
+        db.surveys.clear(),
+        db.advices.clear(),
+        db.revisions.clear()
+      ])
+      const rev = <T>(row: T): T & Revisioned => ({ ...row, revision: ROW_REVISION })
+      await db.sections.bulkPut((payload.sections ?? []).map(rev))
+      await db.rings.bulkPut((payload.rings ?? []).map(rev))
+      await db.cracks.bulkPut((payload.cracks ?? []).map(rev))
+      await db.surveys.bulkPut((payload.surveys ?? []).map(rev))
+      await db.advices.bulkPut((payload.advices ?? []).map(rev))
+      if (payload.revisions && payload.revisions.length > 0) {
+        await db.revisions.bulkPut(payload.revisions)
+      }
+      // 旧版存档没有修订链：按当时内容补初始链（缺失不算篡改）；幂等，重复导入不多记
+      await backfillMissingChainsIn(db, {
+        source: REVISION_SOURCE.importBackfill,
+        action: '存档导入补初始链',
+        at: Date.now()
+      })
+    }
+  )
 }
 
-/** 清空全部业务表 */
+/** 清空全部业务表（含修订链） */
 export async function clearAllTables(): Promise<void> {
-  await db.transaction('rw', db.sections, db.rings, db.cracks, db.surveys, db.advices, async () => {
-    await Promise.all([
-      db.sections.clear(),
-      db.rings.clear(),
-      db.cracks.clear(),
-      db.surveys.clear(),
-      db.advices.clear()
-    ])
-  })
+  await db.transaction(
+    'rw',
+    [db.sections, db.rings, db.cracks, db.surveys, db.advices, db.revisions],
+    async () => {
+      await Promise.all([
+        db.sections.clear(),
+        db.rings.clear(),
+        db.cracks.clear(),
+        db.surveys.clear(),
+        db.advices.clear(),
+        db.revisions.clear()
+      ])
+    }
+  )
 }
 
 /** 清空后重新播种（演示数据重置） */

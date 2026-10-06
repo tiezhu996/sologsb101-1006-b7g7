@@ -36,6 +36,12 @@ const routes: RouteRecordRaw[] = [
     component: () => import('@/pages/BackupView.vue'),
     meta: { title: '整治建议与数据备份', icon: 'Coin' }
   },
+  {
+    path: '/audit',
+    name: 'audit-view',
+    component: () => import('@/pages/AuditView.vue'),
+    meta: { title: '修订链核对（审计抽查）', icon: 'DocumentChecked' }
+  },
   { path: '/:pathMatch(.*)*', redirect: '/sections' }
 ]
 

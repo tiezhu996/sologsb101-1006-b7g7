@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { Coin, DataLine, Files, Grid, TrendCharts } from '@element-plus/icons-vue'
+import { Coin, DataLine, DocumentChecked, Files, Grid, TrendCharts } from '@element-plus/icons-vue'
 import { useSectionStore } from '@/stores/sectionStore'
 import { useCrackStore } from '@/stores/crackStore'
 import { useSurveyStore } from '@/stores/surveyStore'
@@ -17,10 +17,13 @@ const navItems = computed(() => [
   { path: '/cracks', label: '裂缝初测', icon: Grid, badge: String(crackStore.cracks.length) },
   { path: '/surveys', label: '复测对比', icon: DataLine, badge: String(surveyStore.surveys.length) },
   { path: '/trends', label: '速率分级', icon: TrendCharts, badge: String(crackStore.warningCount) },
+  { path: '/audit', label: '核对审计', icon: DocumentChecked, badge: '' },
   { path: '/backup', label: '建议与备份', icon: Coin, badge: '' }
 ])
 
-const activePath = computed(() => (route.path.startsWith('/sections') ? '/sections' : route.path))
+const activePath = computed(() =>
+  ['/sections', '/cracks', '/surveys', '/trends', '/audit', '/backup'].includes(route.path) ? route.path : '/sections'
+)
 
 function go(path: string): void {
   void router.push(path)

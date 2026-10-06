@@ -5,7 +5,8 @@
 import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
 import { useIdbTable } from '@/hooks/useIdbTable'
-import { db, deleteCrackCascade, readUiPrefs, writeUiPrefs, type CrackRow } from '@/utils/db'
+import { deleteCrackCascade, readUiPrefs, writeUiPrefs, type CrackRow } from '@/utils/db'
+import { commitEntities } from '@/utils/ledgerGateway'
 import type { Crack, CrackDraft, CrackFilterState, CrackPosition, CrackDirection, CrackState } from '@/types/crack'
 import { createEmptyCrackFilter, CRACK_DIRECTIONS, CRACK_POSITIONS, CRACK_STATES } from '@/types/crack'
 import type { AdviceLevel } from '@/types/advice'
@@ -29,7 +30,12 @@ export interface CrackEnriched {
 }
 
 export const useCrackStore = defineStore('crack', () => {
-  const crackTable = useIdbTable<CrackRow>((database) => database.cracks, { sortByUpdatedAt: false })
+  const crackTable = useIdbTable<CrackRow>((database) => database.cracks, {
+    sortByUpdatedAt: false,
+    entityType: 'crack',
+    idPrefix: 'crack',
+    defaultSource: '裂缝初测现场录入'
+  })
   const sectionStore = useSectionStore()
   const surveyStore = useSurveyStore()
 
@@ -166,7 +172,7 @@ export const useCrackStore = defineStore('crack', () => {
         lengthMm: Math.round(draft.lengthMm),
         state: draft.state
       },
-      'crack'
+      { source: '裂缝初测现场录入', action: '初始建账' }
     )) as CrackRow
     return row
   }
@@ -180,26 +186,31 @@ export const useCrackStore = defineStore('crack', () => {
       const ring = sectionStore.ringById.get(patch.ringId)
       if (ring) next.sectionId = ring.sectionId
     }
-    await crackTable.update(id, next)
+    await crackTable.update(id, next, { source: '裂缝档案现场纠错', action: '裂缝档案更正' })
   }
 
   async function removeCrack(id: string): Promise<void> {
+    // 复测/建议由级联删除处理，这里仅兜底清裂缝本身以外的修订链
     await deleteCrackCascade(id)
     selectedIds.value = selectedIds.value.filter((item) => item !== id)
   }
 
-  /** 批量改状态（勾选后一次生效） */
+  /** 批量改状态（勾选后一次生效）：逐条追加更正修订，单事务提交、幂等不多记 */
   async function bulkSetState(ids: string[], state: CrackState): Promise<void> {
     if (ids.length === 0) return
-    const patch = { state, updatedAt: Date.now() }
-    await db.cracks.bulkPut(
-      cracks.value.filter((crack) => ids.includes(crack.id)).map((crack) => ({ ...crack, ...patch }))
+    await commitEntities(
+      'crack',
+      ids.map((id) => ({ id, patch: { state } })),
+      { source: '裂缝台账批量改状态（现场纠错）', action: `批量置为「${state}」` }
     )
     selectedIds.value = []
   }
 
   async function setState(id: string, state: CrackState): Promise<void> {
-    await crackTable.update(id, { state })
+    await crackTable.update(id, { state }, {
+      source: '裂缝状态现场流转',
+      action: `状态流转为「${state}」`
+    })
   }
 
   function toggleSelect(id: string, checked: boolean): void {
