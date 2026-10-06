@@ -7,13 +7,17 @@ import { defineStore } from 'pinia'
 import { useIdbTable } from '@/hooks/useIdbTable'
 import {
   db,
+  createId,
   deleteRingCascade,
   deleteSectionCascade,
   readUiPrefs,
   writeUiPrefs,
+  ROW_REVISION,
   type RingRow,
   type SectionRow
 } from '@/utils/db'
+import { createEntity, correctEntity } from '@/utils/revisionService'
+import { REVISION_SOURCES } from '@/types/revision'
 import {
   STRUCTURE_TYPES,
   formatMileage,
@@ -81,15 +85,21 @@ export const useSectionStore = defineStore('section', () => {
   }
 
   async function createSection(draft: SectionDraft): Promise<SectionRow> {
-    const row = (await sectionTable.create(
+    const now = Date.now()
+    const row = (await createEntity(
+      'section',
       {
+        id: createId('sec'),
         line: draft.line.trim(),
         startMileage: Math.max(0, Math.round(draft.startMileage)),
         endMileage: Math.max(0, Math.round(draft.endMileage)),
         structureType: draft.structureType,
-        ringCount: Math.max(0, Math.round(draft.ringCount))
+        ringCount: Math.max(0, Math.round(draft.ringCount)),
+        createdAt: now,
+        updatedAt: now,
+        revision: ROW_REVISION
       },
-      'sec'
+      { source: REVISION_SOURCES.init }
     )) as SectionRow
     await selectSection(row.id)
     return row
@@ -101,7 +111,7 @@ export const useSectionStore = defineStore('section', () => {
     if (patch.startMileage !== undefined) next.startMileage = Math.max(0, Math.round(patch.startMileage))
     if (patch.endMileage !== undefined) next.endMileage = Math.max(0, Math.round(patch.endMileage))
     if (patch.ringCount !== undefined) next.ringCount = Math.max(0, Math.round(patch.ringCount))
-    await sectionTable.update(id, next)
+    await correctEntity('section', id, { ...next, updatedAt: Date.now() }, { source: REVISION_SOURCES.correct })
   }
 
   async function removeSection(id: string): Promise<void> {
@@ -163,15 +173,21 @@ export const useSectionStore = defineStore('section', () => {
   }
 
   async function createRing(draft: RingDraft): Promise<RingRow> {
-    const row = (await ringTable.create(
+    const now = Date.now()
+    const row = (await createEntity(
+      'ring',
       {
+        id: createId('ring'),
         sectionId: draft.sectionId || currentSectionId.value || '',
         ringNo: Math.max(0, Math.round(draft.ringNo)),
         mileage: Math.max(0, Math.round(draft.mileage)),
         segmentType: draft.segmentType,
-        installDate: draft.installDate
+        installDate: draft.installDate,
+        createdAt: now,
+        updatedAt: now,
+        revision: ROW_REVISION
       },
-      'ring'
+      { source: REVISION_SOURCES.init }
     )) as RingRow
     return row
   }
@@ -180,7 +196,7 @@ export const useSectionStore = defineStore('section', () => {
     const next: Partial<RingRow> = { ...patch }
     if (patch.ringNo !== undefined) next.ringNo = Math.max(0, Math.round(patch.ringNo))
     if (patch.mileage !== undefined) next.mileage = Math.max(0, Math.round(patch.mileage))
-    await ringTable.update(id, next)
+    await correctEntity('ring', id, { ...next, updatedAt: Date.now() }, { source: REVISION_SOURCES.correct })
   }
 
   async function removeRing(id: string): Promise<void> {

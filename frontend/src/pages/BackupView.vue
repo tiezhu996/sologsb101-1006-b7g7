@@ -19,16 +19,20 @@ import {
   DB_VERSION,
   clearAllTables,
   countAll,
+  createId,
   db,
   exportSnapshot,
   importSnapshot,
   readLastBackupAt,
   readStampedDbVersion,
   resetDatabase,
+  ROW_REVISION,
   stampBackupTime,
   type AdviceRow,
   type BackupPayload
 } from '@/utils/db'
+import { correctEntity, createEntity, deleteEntityWithTombstone } from '@/utils/revisionService'
+import { REVISION_SOURCES } from '@/types/revision'
 import {
   ADVICE_LEVELS,
   ADVICE_MEASURES,
@@ -157,10 +161,15 @@ async function submit(): Promise<void> {
   const valid = await instance.validate().catch(() => false)
   if (!valid) return
   if (editingId) {
-    await adviceTable.update(editingId, { ...form })
-    ElMessage.success('整治建议已更新')
+    await correctEntity('advice', editingId, { ...form }, { source: REVISION_SOURCES.correct })
+    ElMessage.success('整治建议已更新（已追加更正记录）')
   } else {
-    await adviceTable.create({ ...form }, 'ad')
+    const now = Date.now()
+    await createEntity(
+      'advice',
+      { id: createId('ad'), ...form, createdAt: now, updatedAt: now, revision: ROW_REVISION },
+      { source: REVISION_SOURCES.init }
+    )
     ElMessage.success('整治建议已创建')
   }
   dialogVisible.value = false
@@ -169,13 +178,13 @@ async function submit(): Promise<void> {
 
 async function removeAdvice(advice: AdviceRow): Promise<void> {
   const confirmed = await ElMessageBox.confirm(
-    `确认删除「${crackOf(advice.crackId)?.code ?? '该裂缝'}」的整治建议？`,
+    `确认删除「${crackOf(advice.crackId)?.code ?? '该裂缝'}」的整治建议？修订链将保留删除记录备查。`,
     '删除确认',
     { type: 'warning', confirmButtonText: '确认删除', cancelButtonText: '取消' }
   ).catch(() => false)
   if (!confirmed) return
-  await adviceTable.remove(advice.id)
-  ElMessage.success('整治建议已删除')
+  await deleteEntityWithTombstone('advice', advice.id, { source: REVISION_SOURCES.delete })
+  ElMessage.success('整治建议已删除（修订链保留）')
   await refreshCounts()
 }
 
@@ -185,7 +194,7 @@ async function advance(advice: AdviceRow): Promise<void> {
     ElMessage.info('该建议已完成闭环')
     return
   }
-  await adviceTable.update(advice.id, { state: next })
+  await correctEntity('advice', advice.id, { state: next }, { source: REVISION_SOURCES.stateFlow })
   ElMessage.success(`建议状态已推进为「${next}」`)
   await refreshCounts()
 }
@@ -402,6 +411,7 @@ function adviceRowKey(row: AdviceRow): string {
           {{ counts.cracks ?? 0 }} / {{ counts.surveys ?? 0 }}
         </el-descriptions-item>
         <el-descriptions-item label="整治建议">{{ counts.advices ?? 0 }}</el-descriptions-item>
+        <el-descriptions-item label="修订记录">{{ counts.revisions ?? 0 }}</el-descriptions-item>
       </el-descriptions>
 
       <div style="display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px">

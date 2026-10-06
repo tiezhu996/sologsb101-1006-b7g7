@@ -5,7 +5,9 @@
 import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
 import { useIdbTable } from '@/hooks/useIdbTable'
-import { db, deleteCrackCascade, readUiPrefs, writeUiPrefs, type CrackRow } from '@/utils/db'
+import { createId, deleteCrackCascade, readUiPrefs, writeUiPrefs, ROW_REVISION, type CrackRow } from '@/utils/db'
+import { bulkCorrectEntities, correctEntity, createEntity } from '@/utils/revisionService'
+import { REVISION_SOURCES } from '@/types/revision'
 import type { Crack, CrackDraft, CrackFilterState, CrackPosition, CrackDirection, CrackState } from '@/types/crack'
 import { createEmptyCrackFilter, CRACK_DIRECTIONS, CRACK_POSITIONS, CRACK_STATES } from '@/types/crack'
 import type { AdviceLevel } from '@/types/advice'
@@ -155,8 +157,11 @@ export const useCrackStore = defineStore('crack', () => {
 
   async function createCrack(draft: CrackDraft): Promise<CrackRow> {
     const ring = sectionStore.ringById.get(draft.ringId)
-    const row = (await crackTable.create(
+    const now = Date.now()
+    const row = (await createEntity(
+      'crack',
       {
+        id: createId('crack'),
         ringId: draft.ringId,
         sectionId: ring ? ring.sectionId : '',
         code: draft.code.trim() || `SL-${Date.now().toString().slice(-5)}`,
@@ -164,9 +169,12 @@ export const useCrackStore = defineStore('crack', () => {
         direction: draft.direction,
         widthMm: round(draft.widthMm, 2),
         lengthMm: Math.round(draft.lengthMm),
-        state: draft.state
+        state: draft.state,
+        createdAt: now,
+        updatedAt: now,
+        revision: ROW_REVISION
       },
-      'crack'
+      { source: REVISION_SOURCES.init }
     )) as CrackRow
     return row
   }
@@ -180,7 +188,7 @@ export const useCrackStore = defineStore('crack', () => {
       const ring = sectionStore.ringById.get(patch.ringId)
       if (ring) next.sectionId = ring.sectionId
     }
-    await crackTable.update(id, next)
+    await correctEntity('crack', id, { ...next, updatedAt: Date.now() }, { source: REVISION_SOURCES.correct })
   }
 
   async function removeCrack(id: string): Promise<void> {
@@ -188,18 +196,21 @@ export const useCrackStore = defineStore('crack', () => {
     selectedIds.value = selectedIds.value.filter((item) => item !== id)
   }
 
-  /** 批量改状态（勾选后一次生效） */
+  /** 批量改状态（勾选后一次生效）：逐条判定是否真有变化，无变化不多记 */
   async function bulkSetState(ids: string[], state: CrackState): Promise<void> {
     if (ids.length === 0) return
-    const patch = { state, updatedAt: Date.now() }
-    await db.cracks.bulkPut(
-      cracks.value.filter((crack) => ids.includes(crack.id)).map((crack) => ({ ...crack, ...patch }))
+    const targets = cracks.value.filter((crack) => ids.includes(crack.id))
+    await bulkCorrectEntities(
+      'crack',
+      targets,
+      { state, updatedAt: Date.now() },
+      { source: REVISION_SOURCES.stateFlow }
     )
     selectedIds.value = []
   }
 
   async function setState(id: string, state: CrackState): Promise<void> {
-    await crackTable.update(id, { state })
+    await correctEntity('crack', id, { state, updatedAt: Date.now() }, { source: REVISION_SOURCES.stateFlow })
   }
 
   function toggleSelect(id: string, checked: boolean): void {

@@ -16,7 +16,9 @@ import { useSectionStore } from '@/stores/sectionStore'
 import { useSurveyStore } from '@/stores/surveyStore'
 import { useIdbTable } from '@/hooks/useIdbTable'
 import { useCrackTrend } from '@/hooks/useCrackTrend'
-import { db, type AdviceRow } from '@/utils/db'
+import { createId, ROW_REVISION, type AdviceRow } from '@/utils/db'
+import { correctEntity, createEntity, deleteEntityWithTombstone } from '@/utils/revisionService'
+import { REVISION_SOURCES } from '@/types/revision'
 import {
   ADVICE_LEVELS,
   ADVICE_MEASURES,
@@ -94,17 +96,21 @@ async function generateAdvice(row: CrackEnriched): Promise<void> {
   }
   const now = Date.now()
   const level = row.level
-  const advice: AdviceRow = {
-    id: `ad_${now.toString(36)}${Math.random().toString(36).slice(2, 6)}`,
-    crackId: row.crack.id,
-    level,
-    measure: LEVEL_MEASURE_SUGGEST[level],
-    basis: basisText(row.rate, level),
-    state: '待下发',
-    createdAt: now,
-    updatedAt: now
-  }
-  await db.advices.put(advice)
+  const advice = await createEntity(
+    'advice',
+    {
+      id: createId('ad'),
+      crackId: row.crack.id,
+      level,
+      measure: LEVEL_MEASURE_SUGGEST[level],
+      basis: basisText(row.rate, level),
+      state: '待下发',
+      createdAt: now,
+      updatedAt: now,
+      revision: ROW_REVISION
+    },
+    { source: REVISION_SOURCES.init }
+  )
   ElMessage.success(`已按「${level}」生成整治建议草稿：${advice.measure}`)
 }
 
@@ -138,14 +144,19 @@ function openAdviceEdit(row: CrackEnriched): void {
 async function submitAdvice(): Promise<void> {
   const advice = adviceOf(adviceForm.crackId)
   if (!advice) return
-  await db.advices.update(advice.id, {
-    level: adviceForm.level,
-    measure: adviceForm.measure,
-    basis: adviceForm.basis.trim(),
-    state: adviceForm.state,
-    updatedAt: Date.now()
-  })
-  ElMessage.success('整治建议已更新')
+  await correctEntity(
+    'advice',
+    advice.id,
+    {
+      level: adviceForm.level,
+      measure: adviceForm.measure,
+      basis: adviceForm.basis.trim(),
+      state: adviceForm.state,
+      updatedAt: Date.now()
+    },
+    { source: REVISION_SOURCES.correct }
+  )
+  ElMessage.success('整治建议已更新（已追加更正记录）')
   adviceDialogVisible.value = false
 }
 
@@ -153,13 +164,13 @@ async function removeAdvice(row: CrackEnriched): Promise<void> {
   const advice = adviceOf(row.crack.id)
   if (!advice) return
   const confirmed = await ElMessageBox.confirm(
-    `确认撤销「${row.crack.code}」的整治建议？撤销后该裂缝回到未生成状态。`,
+    `确认撤销「${row.crack.code}」的整治建议？撤销后修订链保留删除记录备查。`,
     '撤销确认',
     { type: 'warning', confirmButtonText: '确认撤销', cancelButtonText: '取消' }
   ).catch(() => false)
   if (!confirmed) return
-  await db.advices.delete(advice.id)
-  ElMessage.success('整治建议已撤销')
+  await deleteEntityWithTombstone('advice', advice.id, { source: REVISION_SOURCES.delete })
+  ElMessage.success('整治建议已撤销（修订链保留）')
 }
 
 function openDrawer(row: CrackEnriched): void {
